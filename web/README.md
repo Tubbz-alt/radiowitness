@@ -1,5 +1,5 @@
 # rw-web
-Publisher homepage generator.
+TODO: cleanup publisher homepage generator.
 
 ```
 $ ./bin/radiowitness json dat://author.key \

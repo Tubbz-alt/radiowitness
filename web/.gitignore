@@ -1,0 +1,9 @@
+dat.json
+package-lock.json
+
+.nyc_output/
+coverage/
+dist/
+
+node_modules/
+*\.swp

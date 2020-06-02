@@ -20,13 +20,13 @@ RUN mkdir -p ${HOME}/lib
 WORKDIR $HOME
 COPY lib/rs lib/rs
 
-RUN mkdir -p lib/rs/librtlsdr/build
-WORKDIR ${HOME}/lib/rs/librtlsdr/build
+RUN mkdir -p lib/c/librtlsdr/build
+WORKDIR ${HOME}/lib/c/librtlsdr/build
 RUN cmake ../ -DINSTALL_UDEV_RULES=ON -DDETACH_KERNEL_DRIVER=ON
 RUN make
 RUN make install
 
-WORKDIR ${HOME}/lib/rs/liquid-dsp
+WORKDIR ${HOME}/lib/c/liquid-dsp
 RUN chmod +x bootstrap.sh
 RUN ./bootstrap.sh && ./configure
 RUN make
@@ -46,8 +46,8 @@ RUN cargo install --force --path .
 WORKDIR $HOME
 COPY lib/c lib/c
 
-RUN mkdir -p ${HOME}/lib/c/itpp-4.3.1/build
-WORKDIR ${HOME}/lib/c/itpp-4.3.1/build
+RUN mkdir -p ${HOME}/lib/c/itpp/build
+WORKDIR ${HOME}/lib/c/itpp/build
 RUN cmake ../
 RUN make -j`nproc`
 RUN make install
