@@ -1,0 +1,7 @@
+{
+  "type": ["website"],
+  "title": "RadioWitness",
+  "description": "Immutable, peer-to-peer archiving and distribution of police radio calls.",
+  "web_root": "/",
+  "url": "dat://9a46f0cebcf74499a0fd07edcf14512d1fb6b25fe187c5e1a4e691e5fae73fbb"
+}

@@ -1,0 +1,196 @@
+<html>
+<head>
+<title>RadioWitness</title>
+</head>
+<body>
+<h1>RadioWitness</h1>
+<p>Immutable, peer-to-peer archiving and distribution of police radio calls. Authors use <a href="https://sdr.osmocom.org/trac/wiki/rtl-sdr">Software-Defined Radios</a> and <a href="https://datproject.org/">Dat Archives</a> to record local police radio. Publishers seed archives from Authors and then re-distribute them to larger audiances. Other rolse arise too, such as Studios who synthesize radio archives into archives of audible speech, and Indexers who aggregate metadata on individual radio calls. Stop by <a href="https://webchat.freenode.net/">#radiowitness on freenode</a> and say hi.</p>
+<h2>Download &amp; Build</h2>
+<p>This software distribution is itself a Dat Archive, you can get a copy of it by opening <a href="dat://9a46f0cebcf74499a0fd07edcf14512d1fb6b25fe187c5e1a4e691e5fae73fbb">this link</a> in <a href="https://beakerbrowser.com">Beaker Browser</a> or from the command line:</p>
+<pre><code>$ npm install -g dat
+$ dat clone dat://9a46f0cebcf74499a0fd07edcf14512d1fb6b25fe187c5e1a4e691e5fae73fbb ./radiowitness
+$ cd ./radiowitness
+$ docker build -t rwp2p .
+$ docker build -t usbreset lib/c/usbreset
+</code></pre>
+<h2>Search for Radios</h2>
+<pre><code>$ chmod +x ./bin/rtl_devices.sh
+$ docker run $(./bin/rtl_devices.sh) --rm \
+    rwp2p search -g 26 -f &quot;851162500,851287500,851137500&quot; 2&gt; /dev/null
+&gt; 851162500 counted 0 frames.
+&gt; 851287500 counted 36 frames.
+&gt; 851137500 counted 43 frames.
+$
+$ docker volume create rw-author
+$ docker run --rm --mount source=rw-author,target=/archive \
+    rwp2p author create --lat &quot;30.245016&quot; --lon=&quot;-97.788914&quot; --wacn 781833 --sysid 318 --rfssid 1 --siteid 1
+&gt; dat://d7a4c7d47b4e9791cae6710b637afc76d462a2aafcf05ba60ce891925c495271
+</code></pre>
+<h2>Provision Storage</h2>
+<p>This technique makes use of the <a href="https://min.io">Minio</a> object store in order to support multiple cloud storage APIs. Publishers peer with Authors, replicate their archive into minio, then seed their archive from minio. Start minio and create a bucket:</p>
+<pre><code>$ docker network create rw-net
+$ docker run -d --name rw-objects --network rw-net -p 9000:9000 \
+    -e MINIO_ACCESS_KEY=abc -e MINIO_SECRET_KEY=12345678 \
+    minio/minio server /data
+$
+$ docker run --rm -it --network rw-net --entrypoint=/bin/sh minio/mc
+# mc config host add local http://rw-objects:9000 abc 12345678
+# mc mb local/rw-author &amp;&amp; exit
+&gt; Bucket created successfully `local/rw-author`.
+</code></pre>
+<h2>Authoring &amp; Publishing</h2>
+<p>The <a href="https://www.datprotocol.com/">Dat Protocol</a> is transport agnostic, meaning Dat peers can communicate over TCP, UDP, any duplex stream really. This flexibility allows Publishers to provide any number of peering strategies to their Authors. In practice a TCP socket on a well-routed VPS is a fine start, add <a href="https://www.wireguard.com/">WireGuard VPN</a> and you'll be feeling like the su of Nynex. Both Author and Publisher peers replicate via <code>stdin&amp;stdout</code> so you've just gotta pipe them together using your transport of choice, in this example a linux fifo:</p>
+<pre><code>$ mkfifo /tmp/replication
+$ docker run $(./bin/rtl_devices.sh) -i --name rw-author --mount source=rw-author,target=/archive \
+    rwp2p author --radios 3 --mux 2 -s 1200000 -g 26 -f 851137500 &lt; /tmp/replication | \
+      docker run -i --name rw-pub --network rw-net -p 9001:9001 -e WSS=9001 \
+        -v /tmp/rw-pub-meta:/metadata:rw -e OBJECTS=rw-objects:9000 -e BUCKET=rw-author \
+        rwp2p publish dat://d7a4c7d47b4e9791cae6710b637afc76d462a2aafcf05ba60ce891925c495271 &gt; /tmp/replication
+</code></pre>
+<h2>Audio Synthesis</h2>
+<p>Police radio is unlike the radio you hear from a car or boombox because it travels through the airwaves in a compressed form, all this means is that we've got to do an extra step to get something audible out of it. This extra step is intentionally left behind by both Author and Publisher peers because the <em>raw</em> radio archive has importance in and of itself. The Studio peer reads a radio archive as input and produces an audio archive as output:</p>
+<pre><code>$ docker volume create rw-studio
+$ docker run --rm --mount source=rw-studio,target=/app \
+    --network rw-net -e PUB=rw-pub:9001 \
+    rwp2p studio create dat://d7a4c7d47b4e9791cae6710b637afc76d462a2aafcf05ba60ce891925c495271
+&gt; dat://9a09cb434fab6bf8c126f3036c4d9a7965e7c9acd3481db7df86bf665355259d
+$
+$ mc mb rwb2/rw-studio
+$ mkfifo /tmp/repl-studio
+$
+$ docker run -d --name rw-studio --mount source=rw-studio,target=/app \
+    --network rw-net -e PUB=rw-pub:9001 \
+    rwp2p studio &lt; /tmp/repl-studio | \
+      docker run -d --name rw-pub-studio \
+        --network rw-net -p 9002:9002 -e WSS=9002 -e OBJECTS=rw-objects:9000 -e BUCKET=rw-studio \
+        rwp2p publish dat://9a09cb434fab6bf8c126f3036c4d9a7965e7c9acd3481db7df86bf665355259d &gt; /tmp/repl-studio
+$
+$ docker run --rm -it --network rw-net -e PUB=rw-pub-studio:9002 \
+    rwp2p play dat://9a09cb434fab6bf8c126f3036c4d9a7965e7c9acd3481db7df86bf665355259d | \
+    play -t raw -b 16 -e signed -r 8k -c 1 -
+</code></pre>
+<h2>Audio Indexing</h2>
+<p>The archives created by Studios are basically giant, ever-growing <a href="https://en.wikipedia.org/wiki/WAV">.WAV audio files</a> with a handful of extra metadata thrown in. Studio archives are great for streaming live but to really explore years worth of audio some search indexes are needed. Index peers read an audio archive as input and produces a <a href="https://github.com/mafintosh/hyperdb">hyperdb</a> as output with calls batched by hours-since-unix-epoch at keys with the form <code>/calls/{epoch-hour}/{callid}</code>:</p>
+<pre><code>$ docker volume create rw-index
+$ docker run --rm --mount source=rw-index,target=/app \
+    --network rw-net -e PUB=rw-pub-studio:9002 \
+    rwp2p index create dat://9a09cb434fab6bf8c126f3036c4d9a7965e7c9acd3481db7df86bf665355259d
+&gt; dat://593aae4e3c3870d53961849144a07c4014479656ef127191efcef840804bf9e1
+$
+$ mc mb rwb2/rw-index
+$ mkfifo /tmp/repl-index
+$
+$ docker run -d --name rw-index --mount source=rw-index,target=/app \
+    --network rw-net -e PUB=rw-pub-studio:9002 \
+    rwp2p index &lt; /tmp/repl-index | \
+      docker run -d --name rw-pub-index \
+        --network rw-net -p 9003:9003 -e WSS=9003 -e OBJECTS=rw-objects:9000 -e BUCKET=rw-index \
+        rwp2p publish dat://593aae4e3c3870d53961849144a07c4014479656ef127191efcef840804bf9e1 &gt; /tmp/repl-index
+</code></pre>
+<h2>Web App</h2>
+<p>todo: serialize archive keys along with peer list into <code>dat.json</code>:</p>
+<pre><code>$ mkdir -p archive.web
+$ ./bin/radiowitness json dat://author.key \
+    --studio dat://studio.key --index dat://index.key &gt; archive.web/dat.json
+$ dat create -y archive.web
+$ ln -f archive.web/dat.json web/dat.json
+$ npm run build --prefix web/
+$ cp -r web/dist/\* archive.web/
+$ dat sync archive.web
+</code></pre>
+<h2>Multi-Host Deploy</h2>
+<p>vpn w/ iptables + WireGuard</p>
+<h2>Mirror</h2>
+<pre><code>$ mc mb rwb2/rw-mirror
+$ curl https://radiowitness.org/dat.json | docker run -d --name rw-mirror \
+    --network rw-net -p 9004:9004 -e WSS=9004 -e OBJECTS=rw-objects:9000 -e BUCKET=rw-mirror \
+    rwp2p mirror
+</code></pre>
+<h2>Standards &amp; Conventions</h2>
+<p>Different peers author different types of data and so we need to introduce a little structure. All peer types operate on <a href="https://github.com/mafintosh/hypercore">hypercores</a> with the exception of <em>Index</em> who's output is a <a href="https://github.com/mafintosh/hyperdb">hyperdb</a>. Hypercores are an append-only log structure and we use record <code>0</code> within the log as a sort of header. HyperDB is a magic P2P key-value store and we put a sort-of-header at key <code>/rw-about</code>.</p>
+<h3>rw-author hypercore record <code>0</code></h3>
+<pre><code>{
+  &quot;version&quot; : 1,
+  &quot;type&quot; : &quot;rw-author&quot;,
+  &quot;tags&quot; : {
+    &quot;geo&quot; : { &quot;lat&quot; : 4.20, &quot;lon&quot; : 6.66 },
+    &quot;network&quot; : { &quot;wacn&quot; : 1, &quot;sysid&quot; : 1, &quot;rfssid&quot; : 1, &quot;siteid&quot; : 1 }
+  }
+}
+</code></pre>
+<h3>rw-studio hypercore record <code>0</code></h3>
+<p>Notice how <code>links</code> is used to reference the input hypercore:</p>
+<pre><code>{
+  &quot;version&quot; : 1,
+  &quot;type&quot; : &quot;rw-studio&quot;,
+  &quot;links&quot; : {
+    &quot;author&quot; : [{ &quot;type&quot; : &quot;rw-author&quot;, &quot;href&quot; : &quot;dat://abc123&quot; }]
+  },
+  &quot;tags&quot; : {
+    &quot;geo&quot; : { &quot;lat&quot; : 4.20, &quot;lon&quot; : 6.66 },
+    &quot;network&quot; : { &quot;wacn&quot; : 1, &quot;sysid&quot; : 1, &quot;rfssid&quot; : 1, &quot;siteid&quot; : 1 }
+  }
+}
+</code></pre>
+<h3>rw-index hyperdb key <code>/rw-about</code></h3>
+<p>Notice how <code>links</code> is used to reference both the original radio hypercore and the audio hypercore produced by a <code>rw-studio</code> peer:</p>
+<pre><code>{
+  &quot;version&quot; : 1,
+  &quot;type&quot; : &quot;rw-index&quot;,
+  &quot;links&quot; : {
+    &quot;author&quot; : [{ &quot;type&quot; : &quot;rw-author&quot;, &quot;href&quot; : &quot;dat://abc123&quot; }]
+    &quot;author&quot; : [{ &quot;type&quot; : &quot;rw-studio&quot;, &quot;href&quot; : &quot;dat://def456&quot; }]
+  },
+  &quot;tags&quot; : {
+    &quot;geo&quot; : { &quot;lat&quot; : 4.20, &quot;lon&quot; : 6.66 },
+    &quot;network&quot; : { &quot;wacn&quot; : 1, &quot;sysid&quot; : 1, &quot;rfssid&quot; : 1, &quot;siteid&quot; : 1 }
+  }
+}
+</code></pre>
+<h3>rw-publisher <code>dat.json</code></h3>
+<p>The idea here is to build upon the existing Beaker Browser <a href="https://beakerbrowser.com/docs/apis/manifest">dat.json spec</a> as much as possible. In this way Publishers can use a <a href="https://beakerbrowser.com/docs/how-beaker-works/peer-to-peer-websites">Dat Website</a> as the front page of their P2P presence while seeding their Author's archives in a structured, discoverable way.</p>
+<pre><code>{
+  &quot;type&quot; : [&quot;website&quot;, &quot;rw-publisher&quot;],
+  &quot;title&quot; : &quot;Radio Venceremos&quot;,
+  &quot;description&quot; : &quot;we shall overcome&quot;,
+  &quot;web_root&quot; : &quot;/&quot;,
+  &quot;fallback_page&quot; : &quot;/assets/404.html&quot;,
+  &quot;links&quot; : {
+    &quot;publisher&quot; : [
+      { &quot;type&quot; : &quot;rw-author&quot;, &quot;href&quot; : 'dat://abc123' },
+      { &quot;type&quot; : &quot;rw-studio&quot;, &quot;href&quot; : 'dat://def456' },
+      { &quot;type&quot; : &quot;rw-index&quot;, &quot;href&quot; : 'dat://ghi789' }
+    ]
+  }
+}
+</code></pre>
+<h2>Development</h2>
+<p>Making this up as we go... create <code>index.html</code> from README.md, rebuild <code>web/</code>, and generate root <code>.datignore</code> file by concatenating all <code>.gitignore</code> files found in subdirectories:</p>
+<pre><code>$ chmod +x bin/radiowitness &amp;&amp; \
+    ./bin/radiowitness devstuff
+</code></pre>
+<h2>TCP Transport Example</h2>
+<p>publisher:</p>
+<pre><code>$ while true; do time ncat -l -p 6666 -c \
+    &quot;docker run -i --rm --name rw.pub --mount source=rw.pub,target=/archive rwp2p \
+      publisher --capacity 604800 dat://1bf95043c31af876acff4f1c937eacce7de85f21178d7e63fb8b2828809b9c98&quot;;
+    sleep 5; done;
+</code></pre>
+<p>author:</p>
+<pre><code>$ while true; do time ncat cool.pub.peer 6666 -c \
+    &quot;docker run $(./bin/rtl_devices.sh) -i --rm --name rw.author --mount source=rw.author,target=/archive rwp2p \
+      author --capacity 604800 --radios 1 --mux 2 -s 1600000 -g 26 -f 851137500&quot;;
+    sleep 5; done;
+</code></pre>
+<h2>Http Tuning</h2>
+<pre><code>$ while true; do \
+    rm -rf /tmp/rw-*; echo 851287500 | \
+      node lib/js/rw-peer/index.js search --period 5000 -d 0 -g 26 | \
+        ./bin/radiowitness http -p 8080;
+    sleep 5; \
+  done;
+</code></pre>
+<h2>License</h2>
+<p>License Zero Reciprocal Public License 2.0.1</p>
+</body>
+</html>

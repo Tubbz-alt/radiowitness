@@ -1,0 +1,65 @@
+#!/bin/bash
+
+echoerr() { echo "$@" 1>&2; }
+
+if [ "$1" == "devstuff" ]; then
+  set -e
+
+  echo ".channels" > /tmp/.datignore
+  echo "archive.author" >> /tmp/.datignore
+  echo "archive.pub" >> /tmp/.datignore
+  echo "archive.studio" >> /tmp/.datignore
+  echo "archive.db" >> /tmp/.datignore
+  echo "archive.web" >> /tmp/.datignore
+  echo "lib/c/itpp-4.3.1/build" >> /tmp/.datignore
+
+  for dir in "lib" "web"; do
+    for ignore in $(find $dir -name .gitignore -type f); do
+      idk=$(echo $ignore | xargs)
+      while read line; do
+        if [ "$line" != "" ]; then
+          if echo $line | grep -v " " > /dev/null; then
+            echo "$idk/$line" | sed 's|.gitignore/||' >> /tmp/.datignore
+          fi
+        fi
+      done < "$idk"
+    done
+  done
+
+  cp /tmp/.datignore .datignore
+
+  npm install -g marlii
+  cat README.md | marlii > index.html
+
+  rm -rf web/dist
+  # npm run build --prefix web/
+  # rm -R -- archive.web/*/
+  # cp -r web/dist/* archive.web/
+  # dat sync archive.web
+
+  exit 0
+fi
+
+if [ "$1" == "json" ]; then
+  node web/lib/datjson.js "$@"
+  exit $?
+fi
+
+# if [ "$1" == "update" ]; then
+#   set -e
+#   hash_prev=$(sha256sum RELEASES.md)
+# 
+#   dat pull
+#
+#   hash_cur=$(sha256sum RELEASES.md)
+#
+#   if [ "$hash_prev" != "$hash_cur" ]; then
+#     ${PAGER:=less}
+#     cat RELEASES.md | $PAGER
+#   fi
+# 
+#   exit 0
+# fi
+
+echoerr "unknown command $1."
+exit 1

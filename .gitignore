@@ -1,0 +1,10 @@
+.channels
+
+archive.author/
+archive.pub/
+archive.studio/
+archive.index/
+archive.web/
+
+.dat/
+*\.swp
