@@ -1,5 +1,5 @@
 # RadioWitness
-Immutable, peer-to-peer archiving and distribution of First Responder radio broadcasts. Authors use [Software-Defined Radios](https://sdr.osmocom.org/trac/wiki/rtl-sdr) and [Dat Archives](https://datproject.org/) to record local Police and Fire radio. Publishers seed archives from Authors and then re-distribute them to larger audiances. Other rolse arise too, such as Studios who synthesize radio archives into archives of audible speech, and Indexers who aggregate metadata on individual radio calls. Stop by [#radiowitness on freenode](https://webchat.freenode.net/) and say hi.
+Immutable, peer-to-peer archiving and distribution of First Responder radio broadcasts. Authors use [Software-Defined Radios](https://sdr.osmocom.org/trac/wiki/rtl-sdr) and [Dat Archives](https://datproject.org/) to record Local Police and Fire radio. Publishers seed archives from Authors and then re-distribute them to larger audiances. Other rolse arise too, such as Studios who synthesize radio archives into archives of audible speech, and Indexers who aggregate metadata on individual radio calls. Stop by [#radiowitness on freenode](https://webchat.freenode.net/) and say hi.
 
 ## Download & Build
 ```
@@ -13,7 +13,7 @@ $ docker build -t usbreset lib/c/usbreset
 ```
 $ chmod +x ./bin/rtl_devices.sh
 $ docker run $(./bin/rtl_devices.sh) --rm \
-    rwp2p search -g 26 -f "851162500,851287500,851137500" 2> /dev/null
+    rwp2p search -g 24 -f "851162500,851287500,851137500" 2> /dev/null
 > 851162500 counted 0 frames.
 > 851287500 counted 36 frames.
 > 851137500 counted 43 frames.
@@ -25,7 +25,7 @@ $ docker run --rm --mount source=rw-author,target=/archive \
 ```
 
 ## Provision Storage
-This technique makes use of the [Minio](https://min.io) object store in order to support multiple cloud storage APIs. Publishers peer with Authors, replicate their archive into minio, then seed their archive from minio. Start minio and create a bucket:
+This technique makes use of the [Minio](https://min.io) object store in order to support multiple cloud storage APIs. Publishers peer with Authors, replicate their archive into Minio, then seed their archive from Minio. Start Minio and create a bucket:
 ```
 $ docker network create rw-net
 $ docker run -d --name rw-objects --network rw-net -p 9000:9000 \
@@ -34,8 +34,8 @@ $ docker run -d --name rw-objects --network rw-net -p 9000:9000 \
 $
 $ docker run --rm -it --network rw-net --entrypoint=/bin/sh minio/mc
 # mc config host add local http://rw-objects:9000 abc 12345678
-# mc mb local/rw-author && exit
-> Bucket created successfully `local/rw-author`.
+# mc mb local/rw-pub-author && exit
+> Bucket created successfully `local/rw-pub-author`.
 ```
 
 ## Authoring & Publishing
@@ -43,9 +43,9 @@ The [Dat Protocol](https://www.datprotocol.com/) is transport agnostic, meaning 
 ```
 $ mkfifo /tmp/replication
 $ docker run $(./bin/rtl_devices.sh) -i --name rw-author --mount source=rw-author,target=/archive \
-    rwp2p author --radios 3 --mux 2 -s 1200000 -g 26 -f 851137500 < /tmp/replication | \
+    rwp2p author --radios 3 --mux 2 -s 1600000 -g 24 -f 851137500 < /tmp/replication | \
       docker run -i --name rw-pub --network rw-net -p 9001:9001 -e WSS=9001 \
-        -v /tmp/rw-publish:/archive:rw -e OBJECTS=rw-objects:9000 -e BUCKET=rw-author \
+        -e OBJECTS=rw-objects:9000 -e BUCKET=rw-pub-author \
         rwp2p publish dat://d7a4c7d47b4e9791cae6710b637afc76d462a2aafcf05ba60ce891925c495271 > /tmp/replication
 ```
 
@@ -58,14 +58,13 @@ $ docker run --rm --mount source=rw-studio,target=/archive \
     rwp2p studio create dat://d7a4c7d47b4e9791cae6710b637afc76d462a2aafcf05ba60ce891925c495271
 > dat://9a09cb434fab6bf8c126f3036c4d9a7965e7c9acd3481db7df86bf665355259d
 $
-$ mc mb rwb2/rw-studio
+$ mc mb local/rw-pub-studio
 $ mkfifo /tmp/repl-studio
 $
 $ docker run -d --name rw-studio --mount source=rw-studio,target=/archive \
     --network rw-net -e PUB=rw-pub:9001 rwp2p studio < /tmp/repl-studio | \
       docker run -d --name rw-pub-studio --network rw-net -p 9002:9002 -e WSS=9002 \
-        --mount source=rw-studio,target=/archive
-        -v /tmp/rw-pub-studio:/archive:rw -e OBJECTS=rw-objects:9000 -e BUCKET=rw-studio \
+        -e OBJECTS=rw-objects:9000 -e BUCKET=rw-pub-studio \
         rwp2p publish dat://9a09cb434fab6bf8c126f3036c4d9a7965e7c9acd3481db7df86bf665355259d > /tmp/repl-studio
 $
 $ docker run --rm -it --network rw-net -e PUB=rw-pub-studio:9002 \
@@ -82,19 +81,19 @@ $ docker run --rm --mount source=rw-index,target=/archive \
     rwp2p index create dat://9a09cb434fab6bf8c126f3036c4d9a7965e7c9acd3481db7df86bf665355259d
 > dat://593aae4e3c3870d53961849144a07c4014479656ef127191efcef840804bf9e1
 $
-$ mc mb rwb2/rw-index
+$ mc mb rwb2/rw-pub-index
 $ mkfifo /tmp/repl-index
 $
-$ docker run -d --name rw-index --mount source=rw-index,target=/app \
+$ docker run -d --name rw-index --mount source=rw-index,target=/archive \
     --network rw-net -e PUB=rw-pub-studio:9002 \
     rwp2p index < /tmp/repl-index | \
       docker run -d --name rw-pub-index --network rw-net -p 9003:9003 -e WSS=9003 \
-        -v /tmp/rw-pub-index:/archive:rw -e OBJECTS=rw-objects:9000 -e BUCKET=rw-index \
+        -e OBJECTS=rw-objects:9000 -e BUCKET=rw-pub-index \
         rwp2p publish dat://593aae4e3c3870d53961849144a07c4014479656ef127191efcef840804bf9e1 > /tmp/repl-index
 ```
 
 ## Web App
-todo: serialize archive keys along with peer list into `dat.json`:
+TODO: serialize archive keys along with peer list into `dat.json`:
 ```
 $ mkdir -p archive.web
 $ ./bin/radiowitness json dat://author.key \
@@ -107,7 +106,7 @@ $ dat sync archive.web
 ```
 
 ## Multi-Host Deploy
-vpn w/ iptables + WireGuard
+TODO: explain VPN w/ iptables + WireGuard.
 
 ## Standards & Conventions
 Different peers author different types of data and so we need to introduce a little structure. All peer types operate on [hypercores](https://github.com/mafintosh/hypercore) with the exception of *Index* who's output is a [hyperdb](https://github.com/mafintosh/hyperdb). Hypercores are an append-only log structure and we use record `0` within the log as a sort of header. HyperDB is a magic P2P key-value store and we put a sort-of-header at key `/rw-about`.
@@ -186,29 +185,32 @@ $ chmod +x bin/radiowitness && \
 ## TCP Transport Example
 publisher:
 ```
-$ while true; do time ncat -l -p 6666 -c \
-    "docker run -i --rm --name rw.pub --mount source=rw.pub,target=/archive rwp2p \
-      publisher --capacity 604800 dat://1bf95043c31af876acff4f1c937eacce7de85f21178d7e63fb8b2828809b9c98";
+$ while true; do time ncat -l -p 31337 -c \
+    "docker run -i --rm --name rw-pub --network rw-net -p 9001:9001 -e WSS=9001 \
+       -e OBJECTS=rw-objects:9000 -e BUCKET=rw-pub-author \
+       rwp2p publish dat://d7a4c7d47b4e9791cae6710b637afc76d462a2aafcf05ba60ce891925c495271";
     sleep 5; done;
 ```
 
 author:
 ```
-$ while true; do time ncat cool.pub.peer 6666 -c \
-    "docker run $(./bin/rtl_devices.sh) -i --rm --name rw.author --mount source=rw.author,target=/archive rwp2p \
-      author --capacity 604800 --radios 1 --mux 2 -s 1600000 -g 26 -f 851137500";
+$ while true; do time ncat cool.pub.peer 31337 -c \
+    "docker run $(./bin/rtl_devices.sh) -i --rm --name rw-author --mount source=rw-author,target=/archive \
+      rwp2p author --radios 3 --mux 2 -s 1600000 -g 24 -f 851137500";
     sleep 5; done;
 ```
 
 ## Mirror
+TODO: cleanup.
 ```
-$ mc mb rwb2/rw-mirror
+$ mc mb rwb2/rw-pub-mirror
 $ curl https://radiowitness.org/dat.json | docker run -d --name rw-mirror \
-    --network rw-net -p 9004:9004 -e WSS=9004 -e OBJECTS=rw-objects:9000 -e BUCKET=rw-mirror \
+    --network rw-net -p 9004:9004 -e WSS=9004 -e OBJECTS=rw-objects:9000 -e BUCKET=rw-pub-mirror \
     rwp2p mirror
 ```
 
 ## Http Tuning
+TODO: cleanup.
 ```
 $ while true; do \
     rm -rf /tmp/rw-*; echo 851287500 | \
